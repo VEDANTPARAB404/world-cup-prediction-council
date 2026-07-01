@@ -1,0 +1,6 @@
+{
+  "name": "World Cup Prediction Council",
+  "description": "Predict the most likely winner of the FIFA World Cup using a multi-agent debate system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
