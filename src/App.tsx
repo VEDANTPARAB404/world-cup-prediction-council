@@ -164,10 +164,11 @@ const INITIAL_CONTENDERS: Contender[] = ALL_48_CONTENDERS.filter(c =>
   ['arg', 'esp', 'fra', 'eng', 'bra', 'ger', 'por', 'col'].includes(c.id)
 );
 
+const DISCUSSION_ROUNDS = 2;
+
 export default function App() {
   const [contenders, setContenders] = useState<Contender[]>(INITIAL_CONTENDERS);
   const [rosterContenders, setRosterContenders] = useState<Contender[]>(ALL_48_CONTENDERS);
-  const [customRounds, setCustomRounds] = useState<number>(2);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'simulation' | 'instructions_tab'>('simulation');
   const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0);
@@ -589,7 +590,7 @@ export default function App() {
       if (!validSynchronizedDataExists) {
         console.log("Running simulation in local mode. Live data verified as completely unavailable.");
         // Only use Offline Local Simulation when store is empty, sync failed, or cache expired.
-        const res = await runSimulation(activeList, customRounds, true, null, clientStoreData);
+        const res = await runSimulation(activeList, DISCUSSION_ROUNDS, true, null, clientStoreData);
         return res;
       } else {
         // Force Live AI Prediction Pipeline
@@ -607,7 +608,7 @@ export default function App() {
 
           const requestPayload = {
             contenders: activeList,
-            rounds: customRounds,
+            rounds: DISCUSSION_ROUNDS,
             liveFootballData: compressedLiveData,
             requestId: uuid
           };
@@ -645,7 +646,7 @@ export default function App() {
           
           let offlineReason = "Backend endpoint unreached or error occurred during fetch.";
           console.log(`Running simulation in local mode. Offline fallback reason: ${offlineReason}`);
-          const res = await runSimulation(activeList, customRounds, true, null, clientStoreData);
+          const res = await runSimulation(activeList, DISCUSSION_ROUNDS, true, null, clientStoreData);
           return res;
         }
       }
@@ -1001,18 +1002,6 @@ export default function App() {
           <span>
             Registered Contenders: <strong className="text-zinc-200 font-semibold">{contenders.length}</strong>
           </span>
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold">Discussion Loops:</label>
-          <select 
-            value={customRounds} 
-            onChange={(e) => setCustomRounds(Number(e.target.value))}
-            className="bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1 text-zinc-300 focus:outline-none focus:border-indigo-500 cursor-pointer text-xs"
-          >
-            <option value={1}>1 Loop</option>
-            <option value={2}>2 Loops</option>
-            <option value={3}>3 Loops</option>
-          </select>
         </div>
       </div>
 
@@ -1484,19 +1473,6 @@ export default function App() {
               </p>
               
               <div className="flex flex-col sm:flex-row items-center gap-4">
-                <div className="flex items-center gap-2 bg-zinc-950 px-4 py-2 rounded-xl border border-zinc-805">
-                  <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider font-bold">Loops:</span>
-                  <select 
-                    value={customRounds} 
-                    onChange={(e) => setCustomRounds(Number(e.target.value))}
-                    className="bg-transparent border-none text-zinc-200 font-mono text-xs focus:outline-none cursor-pointer font-bold"
-                  >
-                    <option value={1}>1 Loop</option>
-                    <option value={2}>2 Loops</option>
-                    <option value={3}>3 Loops</option>
-                  </select>
-                </div>
-
                 <button
                   type="button"
                   id="btn-kickoff-massive"
