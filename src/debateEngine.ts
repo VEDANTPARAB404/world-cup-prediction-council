@@ -384,6 +384,66 @@ export function calculateTournamentProbabilities(
   return calibrated;
 }
 
+function buildAgentLedVerdict(
+  contenders: Contender[],
+  finalProbabilities: Record<string, number>,
+  individualAgentPredictions?: Record<string, {
+    probabilities: Record<string, number>;
+    reasons: Record<string, string>;
+  }>,
+  fallbackWinner?: string
+): {
+  predictedWinner: string;
+  winnerProbability: number;
+  finalVerdict: string;
+  finalConsensusReasoning: string;
+  reasonForConsensus: string;
+} {
+  const contenderNames = contenders.map(c => c.name);
+  const rankedByProbability = [...contenderNames].sort((a, b) => {
+    const diff = (finalProbabilities[b] ?? 0) - (finalProbabilities[a] ?? 0);
+    return diff !== 0 ? diff : a.localeCompare(b);
+  });
+
+  const voteCounts: Record<string, number> = {};
+  const voteSupporters: Record<string, string[]> = {};
+
+  if (individualAgentPredictions) {
+    for (const [agentName, prediction] of Object.entries(individualAgentPredictions)) {
+      const rankedTeams = Object.entries(prediction.probabilities || {}).sort((a, b) => {
+        const diff = b[1] - a[1];
+        return diff !== 0 ? diff : a[0].localeCompare(b[0]);
+      });
+      const topTeam = rankedTeams[0]?.[0];
+      if (!topTeam) continue;
+
+      voteCounts[topTeam] = (voteCounts[topTeam] || 0) + 1;
+      voteSupporters[topTeam] = voteSupporters[topTeam] || [];
+      voteSupporters[topTeam].push(agentName);
+    }
+  }
+
+  const voteWinner = Object.keys(voteCounts).sort((a, b) => {
+    const diff = (voteCounts[b] || 0) - (voteCounts[a] || 0);
+    if (diff !== 0) return diff;
+    const probDiff = (finalProbabilities[b] ?? 0) - (finalProbabilities[a] ?? 0);
+    return probDiff !== 0 ? probDiff : a.localeCompare(b);
+  })[0];
+
+  const predictedWinner = voteWinner || fallbackWinner || rankedByProbability[0] || contenders[0]?.name || 'Spain';
+  const winnerProbability = finalProbabilities[predictedWinner] ?? 0;
+  const supporters = voteSupporters[predictedWinner] || Object.keys(individualAgentPredictions || {});
+  const supporterText = supporters.length > 0 ? supporters.join(', ') : 'the panel';
+
+  return {
+    predictedWinner,
+    winnerProbability,
+    finalVerdict: `The agents delivered the final verdict: ${predictedWinner} was selected by the specialist panel after the strongest votes and probability signals aligned.`,
+    finalConsensusReasoning: `The panel settled on ${predictedWinner} after the specialist agents converged on it as the most stable choice across the debate.`,
+    reasonForConsensus: `The agent panel converged on ${predictedWinner} after endorsements from ${supporterText}.`
+  };
+}
+
 /**
  * Compute a simple 32-bit hash value of an object to verify immutability
  */
@@ -817,9 +877,11 @@ export async function runSimulation(
       };
     });
 
+    const agentVerdict = buildAgentLedVerdict(contenders, offlineProbsMap, individualAgentPredictions, computedTop5[0]?.team || t1);
+
     const resultReport: ModeratorOutput = {
-      predictedWinner: computedTop5[0]?.team || t1,
-      winnerProbability: computedTop5[0]?.probability || 24.5,
+      predictedWinner: agentVerdict.predictedWinner,
+      winnerProbability: agentVerdict.winnerProbability || computedTop5[0]?.probability || 24.5,
       top5: computedTop5,
       keyStrengths: [
         `Excellent Elo rating of ${t1Data.elo} and FIFA rank #${t1Data.rank} providing a stable competitive baseline.`,
@@ -829,7 +891,7 @@ export async function runSimulation(
         `Vulnerable in transition after conceding ${t1Data.goalsAgainst} goals in recent fixtures.`,
         `Risk of fatigue affecting the recent form line of ${t1Data.last5.join(' ')}.`
       ],
-      finalVerdict: `While ${t2} has unmatched recent scoring form and ${t3} has strong attacking shape, ${t1} has the best balance of tactical discipline, strong Elo rating of ${t1Data.elo}, and composure under pressure to win the tournament.`,
+      finalVerdict: agentVerdict.finalVerdict,
       
       strongestArgument: {
         text: "Momentum Analyst provided strong evidence regarding knockout resilience, showing that pedigree, FIFA rank, and Elo composure consistently win matches when pressure is highest.",
@@ -853,7 +915,7 @@ export async function runSimulation(
         endConfidence: 58,
         shiftReason: `Adjusted favorite to ${t1} after acknowledging their defensive solidity and superior goal margin of +${t1Data.goalMargin} compared to peers.`
       },
-      finalConsensusReasoning: `The panel ultimately agreed that ${t1}'s solid defensive block, stable Elo rating, and deep squad make them the strongest contenders in this field.`,
+      finalConsensusReasoning: agentVerdict.finalConsensusReasoning,
       baselineProbabilities: offlineProbsMap,
       finalProbabilities: offlineProbsMap,
       changes: [],
@@ -861,9 +923,9 @@ export async function runSimulation(
       // Multi-agent fields
       individualAgentPredictions,
       consensusProbabilities: offlineProbsMap,
-      winner: computedTop5[0]?.team || t1,
+      winner: agentVerdict.predictedWinner,
       largestDisagreement: "Debate between Stats Analyst's historical Elo and Momentum Analyst's recent form weightings.",
-      reasonForConsensus: "Averaged consensus across all 7 specialist agents, stabilized by high-integrity Elo metrics.",
+      reasonForConsensus: agentVerdict.reasonForConsensus,
       averageProbabilities: offlineProbsMap,
       disagreementScore: "Standard deviation 3.12% across contenders",
       confidenceScore: 84
@@ -1189,7 +1251,7 @@ Return ONLY valid JSON matching this schema:
       throw e;
     }
 
-    let r5;
+    let r5: any;
     let finalReport: ModeratorOutput;
     try {
       r5 = parsedData?.finalRound_consensus || {};
@@ -1319,13 +1381,15 @@ Return ONLY valid JSON matching this schema:
         };
       });
 
+        const agentVerdict = buildAgentLedVerdict(contenders, roundedFinalProbs, individualAgentPredictions, sortedTeamNames[0] || r5.winner || r5.predictedWinner || (contenders[0]?.name || "Spain"));
+
       finalReport = {
-        predictedWinner: r5.winner || r5.predictedWinner || sortedTeamNames[0] || (contenders[0]?.name || "Spain"),
-        winnerProbability: roundedFinalProbs[sortedTeamNames[0]] || 25.0,
+          predictedWinner: agentVerdict.predictedWinner,
+          winnerProbability: agentVerdict.winnerProbability || roundedFinalProbs[sortedTeamNames[0]] || 25.0,
         top5: computedTop5Live,
         keyStrengths: Array.isArray(r5.keyStrengths) ? r5.keyStrengths : ["Rotational capabilities", "Tactical cohesion"],
         keyRisks: Array.isArray(r5.keyRisks) ? r5.keyRisks : ["Transitional vulnerability", "Midfield rotation gaps"],
-        finalVerdict: r5.finalVerdict || `The hybrid sports analytics engine predicts ${sortedTeamNames[0]} as the favorite to win with a calibrated probability of ${roundedFinalProbs[sortedTeamNames[0]]}%.`,
+          finalVerdict: agentVerdict.finalVerdict,
         strongestArgument: {
           text: r5.strongestArgument?.text || "Pedigree overrides statistics in high pressure knockout slots.",
           author: r5.strongestArgument?.author || "Momentum Analyst",
@@ -1348,15 +1412,15 @@ Return ONLY valid JSON matching this schema:
           endConfidence: typeof r5.mostChangedAgent?.endConfidence === 'number' ? r5.mostChangedAgent.endConfidence : 58,
           shiftReason: r5.mostChangedAgent?.shiftReason || "Pivoted after peer challenges highlighted vulnerable transitional elements under heavy pressure."
         },
-        finalConsensusReasoning: r5.finalReasoning || r5.finalConsensusReasoning || "The panel ultimately converged around the selected winner's hybrid strengths, blending deep positional resilience and veteran championship poise.",
+        finalConsensusReasoning: agentVerdict.finalConsensusReasoning,
         baselineProbabilities: baselineProbs,
         finalProbabilities: roundedFinalProbs,
         changes: changesList,
         individualAgentPredictions,
         consensusProbabilities: roundedFinalProbs,
-        winner: r5.winner || r5.predictedWinner || sortedTeamNames[0] || (contenders[0]?.name || "Spain"),
+        winner: agentVerdict.predictedWinner,
         largestDisagreement: typeof r5.majorDisagreements === 'string' ? r5.majorDisagreements : "Debate between raw statistical projection and localized defensive block resilience.",
-        reasonForConsensus: r5.finalReasoning || "Balanced average across 7 distinct specialists, factoring in defensive transition risk.",
+        reasonForConsensus: agentVerdict.reasonForConsensus,
         averageProbabilities: roundedFinalProbs,
         disagreementScore: "Standard deviation 3.12% across contenders",
         confidenceScore: 85

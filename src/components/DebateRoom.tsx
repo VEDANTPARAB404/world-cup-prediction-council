@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { DebateLog, Contender, ModeratorOutput, AgentBelief } from '../types';
-import { Zap, Trophy, ArrowRight, Activity, ArrowDown, Sparkles, TrendingUp, HelpCircle, RotateCcw, ChevronDown, ChevronRight, Calendar, UserCheck } from 'lucide-react';
+import { Zap, Trophy, ArrowRight, Activity, ArrowDown, Sparkles, TrendingUp, HelpCircle, RotateCcw, ChevronDown, ChevronRight, Calendar, UserCheck, Users } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import FifaTrophyLogo from './FifaTrophyLogo';
 import { calculateTournamentProbabilities } from '../debateEngine';
@@ -131,6 +131,16 @@ export default function DebateRoom({
     'Risk Analyst': { favorite: fav1, confidence: 70, history: [{ favorite: fav1, confidence: 70 }] }
   }), [fav1, fav2, fav4]);
 
+  const analystCards = useMemo(() => ([
+    { key: 'Stats Analyst', label: 'Stats Analyst', role: 'FIFA Rank & Elo Ratings', color: 'indigo', icon: Activity },
+    { key: 'Tactical Analyst', label: 'Tactical Analyst', role: 'Tactics & Setup Shapes', color: 'purple', icon: Sparkles },
+    { key: 'Squad Analyst', label: 'Squad Scout', role: 'Roster Depth & Spine Strength', color: 'blue', icon: Users },
+    { key: 'Momentum Analyst', label: 'Momentum Analyst', role: 'Form Runs & Team Morale', color: 'amber', icon: TrendingUp },
+    { key: 'Defensive Analyst', label: 'Defensive Analyst', role: 'Concessions & Low Blocks', color: 'cyan', icon: Trophy },
+    { key: 'Attacking Analyst', label: 'Attacking Analyst', role: 'Goal Scoring & Shooting', color: 'orange', icon: HelpCircle },
+    { key: 'Risk Analyst', label: 'Risk Analyst', role: 'Vulnerability & Transition Risk', color: 'rose', icon: ArrowDown }
+  ]), []);
+
   // Helper to extract the last updated state/belief for a specific agent based on current visible chat logs
   const getAgentActiveState = (agentName: string): AgentBelief => {
     for (let i = chatMessages.length - 1; i >= 0; i--) {
@@ -140,6 +150,16 @@ export default function DebateRoom({
       }
     }
     return defaultBeliefs[agentName] || { favorite: 'Unknown', confidence: 50, history: [] };
+  };
+
+  const getLatestAgentMessage = (agentName: string) => {
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const msg = chatMessages[i];
+      if (msg.agentName === agentName || msg.agentName === agentName.replace(' Analyst', ' Agent')) {
+        return msg;
+      }
+    }
+    return null;
   };
 
   const { data: globalFootballData } = useFootballStore();
@@ -323,16 +343,16 @@ export default function DebateRoom({
             </div>
 
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-              {[
-                { key: 'Stats Analyst', label: 'Stats Analyst', role: 'FIFA Rank & Elo Ratings', color: 'indigo' },
-                { key: 'Tactical Analyst', label: 'Tactical Analyst', role: 'Tactics & Setup Shapes', color: 'purple' },
-                { key: 'Squad Analyst', label: 'Squad Scout', role: 'Roster Depth & Spine Strength', color: 'blue' },
-                { key: 'Momentum Analyst', label: 'Momentum Analyst', role: 'Form Runs & Team Morale', color: 'amber' },
-                { key: 'Defensive Analyst', label: 'Defensive Analyst', role: 'Concessions & Low Blocks', color: 'cyan' },
-                { key: 'Attacking Analyst', label: 'Attacking Analyst', role: 'Goal Scoring & Shooting', color: 'orange' },
-                { key: 'Risk Analyst', label: 'Risk Analyst', role: 'Vulnerability & Transition Risk', color: 'rose' }
-              ].map((item) => {
+              {analystCards.map((item) => {
                 const belief = getAgentActiveState(item.key);
+                const latestMessage = getLatestAgentMessage(item.key);
+                const status = typingAgent === item.key || typingAgent === item.label
+                  ? 'Debating'
+                  : latestMessage
+                    ? 'Completed'
+                    : isRunning
+                      ? 'Thinking'
+                      : 'Completed';
                 
                 // Color configuration
                 const barColor = item.color === 'indigo' ? 'bg-indigo-500' 
@@ -344,37 +364,58 @@ export default function DebateRoom({
                                : 'bg-rose-500';
 
                 return (
-                  <div key={item.key} className="p-3 bg-zinc-950 border border-zinc-808 rounded-xl space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-zinc-700" />
-                        <div>
-                          <strong className="text-xs text-white block font-semibold leading-tight">{item.label}</strong>
-                          <span className="text-[9px] text-zinc-500 uppercase tracking-wider font-mono block">{item.role}</span>
+                  <div key={item.key} className="p-3 bg-zinc-950 border border-zinc-808 rounded-2xl space-y-3 transition-all hover:border-zinc-700 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className={`w-10 h-10 rounded-2xl border flex items-center justify-center shrink-0 ${barColor.replace('bg-', 'bg-')}/10 border-current/20 text-white`}>
+                          <item.icon className="w-4.5 h-4.5" />
                         </div>
+                        <div className="min-w-0">
+                          <strong className="text-xs text-white block font-semibold leading-tight truncate">{item.label}</strong>
+                          <span className="text-[9px] text-zinc-500 uppercase tracking-wider font-mono block mt-0.5">{item.role}</span>
+                        </div>
+                      </div>
+
+                      <span className={`text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full border whitespace-nowrap ${
+                        status === 'Debating'
+                          ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20'
+                          : status === 'Thinking'
+                            ? 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+                            : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                      }`}>
+                        {status}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                      <div className="bg-zinc-900/70 border border-zinc-808/50 rounded-xl p-2">
+                        <span className="text-zinc-500 uppercase tracking-wider block">Current conclusion</span>
+                        <div className="mt-1 flex items-center gap-1.5 text-zinc-100 font-semibold truncate">
+                          <span>{belief.favorite}</span>
+                          {contenders.some(c => c.name.toLowerCase() === belief.favorite.toLowerCase()) && 
+                            getCountryFlag(belief.favorite, contenders.find(c => c.name.toLowerCase() === belief.favorite.toLowerCase())?.flag || '🏳️', "w-4 h-2.5 shrink-0")
+                          }
+                        </div>
+                      </div>
+                      <div className="bg-zinc-900/70 border border-zinc-808/50 rounded-xl p-2">
+                        <span className="text-zinc-500 uppercase tracking-wider block">Confidence</span>
+                        <div className="mt-1 text-white font-semibold">{belief.confidence}%</div>
                       </div>
                     </div>
 
-                    <div className="bg-zinc-900/50 border border-zinc-808/50 rounded-lg p-2.5 space-y-1.5">
+                    <div className="bg-zinc-900/50 border border-zinc-808/50 rounded-xl p-3 space-y-2">
                       <div className="flex justify-between items-center text-[10px] font-mono">
-                        <span className="text-zinc-400 flex items-center gap-1.5">
-                          Favorite: <strong className="text-zinc-200 font-semibold">{belief.favorite}</strong>
-                          {contenders.some(c => c.name.toLowerCase() === belief.favorite.toLowerCase()) && 
-                            getCountryFlag(belief.favorite, contenders.find(c => c.name.toLowerCase() === belief.favorite.toLowerCase())?.flag || '🏳️', "w-4 h-2.5 shrink-0 ml-0.5")
-                          }
-                        </span>
-                        <span className="text-indigo-400 font-bold">{belief.confidence}%</span>
-                      </div>
-                      
-                      <div className="w-full h-1 bg-zinc-950 rounded-full overflow-hidden">
-                        <div className={`h-full ${barColor}`} style={{ width: `${belief.confidence}%` }} />
+                        <span className="text-zinc-400 uppercase tracking-wider">Current reasoning</span>
+                        <span className="text-zinc-500">{latestMessage ? 'Live' : 'Baseline'}</span>
                       </div>
 
-                      {belief.shiftReason && (
-                        <p className="text-[9px] text-zinc-400 font-sans italic leading-tight pt-1.5 border-t border-zinc-808/30 pr-1">
-                          "{belief.shiftReason}"
-                        </p>
-                      )}
+                      <div className="w-full h-1.5 bg-zinc-950 rounded-full overflow-hidden">
+                        <motion.div className={`h-full ${barColor}`} style={{ width: `${belief.confidence}%` }} initial={{ width: 0 }} animate={{ width: `${belief.confidence}%` }} transition={{ duration: 0.7, ease: 'easeOut' }} />
+                      </div>
+
+                      <p className="text-[10px] text-zinc-400 font-sans leading-relaxed line-clamp-3">
+                        {latestMessage?.message || belief.shiftReason || `Confidence is anchored on ${belief.favorite}'s current profile.`}
+                      </p>
                     </div>
                   </div>
                 );
@@ -401,6 +442,18 @@ export default function DebateRoom({
           
           {/* Chat Messages Scrolling list container */}
           <div className="relative flex-1 flex flex-col min-h-[420px] overflow-hidden mb-4">
+              {typingAgent && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mb-3 flex items-center gap-3 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-3 text-xs text-zinc-300"
+                >
+                  <span className="flex h-2.5 w-2.5 rounded-full bg-indigo-400 animate-pulse shrink-0"></span>
+                  <span className="font-mono uppercase tracking-wider text-[10px] text-indigo-200">{typingAgent} is debating</span>
+                  <span className="text-zinc-500">Composing the next statement...</span>
+                </motion.div>
+              )}
+
             <div 
               ref={scrollContainerRef} 
               onScroll={handleScroll}

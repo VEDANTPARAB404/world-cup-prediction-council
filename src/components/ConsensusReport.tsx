@@ -111,6 +111,50 @@ export default function ConsensusReport({
         </div>
       </div>
 
+      {moderatorReport && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-5 md:p-6 shadow-xl shadow-black/10 flex flex-col gap-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-[0.35em] text-zinc-500">Moderator Panel</div>
+              <h3 className="text-lg font-bold text-white mt-2">Consensus summary from the chair</h3>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-3 py-1 text-xs font-mono text-emerald-300">
+              <Shield className="w-3.5 h-3.5" />
+              Consensus strength {moderatorReport.winnerProbability}%
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 lg:col-span-1">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Final winner</div>
+              <div className="mt-3 flex items-center gap-3">
+                <div className="w-16 h-12 rounded-2xl border border-zinc-800 bg-zinc-900 flex items-center justify-center p-1">
+                  {getCountryFlag(moderatorReport.predictedWinner, contenders.find(c => c.name.toLowerCase() === moderatorReport.predictedWinner.toLowerCase())?.flag || '🏆', 'w-14 h-10 rounded')}
+                </div>
+                <div>
+                  <div className="text-2xl font-black text-white leading-none">{moderatorReport.predictedWinner}</div>
+                  <div className="text-xs text-zinc-500 mt-1">Accepted after the final moderation pass</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 lg:col-span-1">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Why the agents accepted it</div>
+              <p className="mt-3 text-sm text-zinc-300 leading-relaxed">
+                {moderatorReport.finalConsensusReasoning || moderatorReport.finalVerdict}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 lg:col-span-1">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Agent verdict takeaway</div>
+              <p className="mt-3 text-sm text-zinc-300 leading-relaxed">
+                {moderatorReport.reasonForConsensus || 'The council favored the team whose baseline advantages survived the strongest cross-examination.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Bento Report Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 animate-fade-in">
         
@@ -129,7 +173,7 @@ export default function ConsensusReport({
                 <div className="flex items-center gap-2">
                   <span className="bg-amber-500/10 text-amber-400 border border-amber-500/25 px-2.5 py-1 rounded-full text-[9px] font-mono font-bold uppercase tracking-wider flex items-center gap-1">
                     <Trophy className="w-3 h-3 text-amber-400 stroke-[2.5]" />
-                    Pundit Consensus Champion Prediction
+                    Agent Consensus Champion Prediction
                   </span>
                 </div>
                 
@@ -152,7 +196,7 @@ export default function ConsensusReport({
                     </div>
                     
                     <div className="space-y-2">
-                      <h5 className="font-semibold text-zinc-400 text-[10px] uppercase tracking-wider font-mono">Expert Editorial Summary:</h5>
+                      <h5 className="font-semibold text-zinc-400 text-[10px] uppercase tracking-wider font-mono">Agent editorial summary:</h5>
                       <p className="text-zinc-200 text-xs md:text-sm leading-relaxed bg-zinc-950 p-4 rounded-xl border border-zinc-808/80 italic shadow-inner">
                         "{moderatorReport.finalVerdict}"
                       </p>
@@ -217,6 +261,10 @@ export default function ConsensusReport({
                   const matchedTeam = contenders.find(c => c.name.toLowerCase() === candidate.team.toLowerCase());
                   const flag = matchedTeam?.flag || '⚽';
                   const originalPrimaryColor = matchedTeam?.primaryColor || '#6366f1';
+                  const baselineProbability = moderatorReport.baselineProbabilities?.[candidate.team];
+                  const trendDelta = typeof baselineProbability === 'number' ? candidate.probability - baselineProbability : 0;
+                  const trendSymbol = trendDelta > 0.2 ? '↑' : trendDelta < -0.2 ? '↓' : '→';
+                  const trendClass = trendDelta > 0.2 ? 'text-emerald-400' : trendDelta < -0.2 ? 'text-rose-400' : 'text-zinc-500';
                   
                   // Custom podium style colors: Gold, Silver, Bronze
                   const is1st = idx === 0;
@@ -255,11 +303,19 @@ export default function ConsensusReport({
                           <span className={`font-black ${is1st ? 'text-amber-400 text-sm' : 'text-indigo-400'}`}>
                             {candidate.probability}%
                           </span>
+                          <span className={`text-[10px] font-bold ${trendClass}`} title={typeof baselineProbability === 'number' ? `Baseline ${baselineProbability.toFixed(1)}%` : 'No baseline comparison'}>
+                            {trendSymbol} {typeof baselineProbability === 'number' ? `${trendDelta > 0 ? '+' : ''}${trendDelta.toFixed(1)}%` : 'n/a'}
+                          </span>
                         </div>
+                      </div>
+
+                      <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1">
+                        <span>{candidate.team}</span>
+                        <span>{candidate.probability.toFixed(1)}%</span>
                       </div>
                       
                       {/* Animated Framer Motion Probability Bar */}
-                      <div className="w-full h-7 bg-zinc-950 rounded-lg overflow-hidden flex items-center px-3 relative border border-zinc-850 font-sans">
+                      <div className="w-full h-8 bg-zinc-950 rounded-xl overflow-hidden flex items-center px-3 relative border border-zinc-850 font-sans">
                         <motion.div 
                           initial={{ width: 0 }}
                           animate={{ width: `${candidate.probability}%` }}

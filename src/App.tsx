@@ -97,6 +97,30 @@ const COUNTRY_MAP: Record<string, string> = {
   'uzbekistan': 'uz'
 };
 
+const TEAM_ALIASES: Record<string, string> = {
+  'dr congo': 'congo dr',
+  'democratic republic of congo': 'congo dr',
+  'democratic republic of the congo': 'congo dr',
+  'congo democratic republic': 'congo dr'
+};
+
+function canonicalTeamKey(teamName: string): string {
+  const normalized = teamName
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ');
+  const alias = TEAM_ALIASES[normalized] || normalized;
+  return alias.split(' ').filter(Boolean).sort().join(' ');
+}
+
+function areTeamNamesEquivalent(leftName: string, rightName: string): boolean {
+  if (!leftName || !rightName) return false;
+  const leftKey = canonicalTeamKey(leftName);
+  const rightKey = canonicalTeamKey(rightName);
+  return leftKey === rightKey || leftKey.includes(rightKey) || rightKey.includes(leftKey);
+}
+
 function getCountryFlag(name: string, emojiFallback: string = '🏳️', sizeClass: string = 'w-5 h-3.5') {
   const norm = name.toLowerCase().trim();
   let code = '';
@@ -165,6 +189,15 @@ const INITIAL_CONTENDERS: Contender[] = ALL_48_CONTENDERS.filter(c =>
 );
 
 const DISCUSSION_ROUNDS = 2;
+const SYSTEM_MESSAGE_DELAY_MS = 320;
+const AGENT_TYPING_DELAY_MIN_MS = 720;
+const AGENT_TYPING_DELAY_RANGE_MS = 260;
+const BETWEEN_MESSAGE_DELAY_MIN_MS = 420;
+const BETWEEN_MESSAGE_DELAY_RANGE_MS = 220;
+const MODERATOR_TYPING_DELAY_MIN_MS = 1200;
+const MODERATOR_TYPING_DELAY_RANGE_MS = 420;
+const MODERATOR_BETWEEN_MESSAGE_DELAY_MIN_MS = 700;
+const MODERATOR_BETWEEN_MESSAGE_DELAY_RANGE_MS = 280;
 
 export default function App() {
   const [contenders, setContenders] = useState<Contender[]>(INITIAL_CONTENDERS);
@@ -176,6 +209,7 @@ export default function App() {
   const [apiMode, setApiMode] = useState<'live-ai' | 'local-simulation'>('local-simulation');
   const [hasCopiedFile, setHasCopiedFile] = useState<boolean>(false);
   const [activeStep, setActiveStep] = useState<WorkflowStep>('SEQUENTIAL_DATA');
+  const discussionDepth = DISCUSSION_ROUNDS;
 
   // Input fields for new custom contender
   const [newTeamName, setNewTeamName] = useState('');
@@ -208,6 +242,25 @@ export default function App() {
   const applyLiveDataToContenders = (list: Contender[], data: any): Contender[] => {
     let updatedList = [...list];
 
+    const deriveRecentForm = (teamName: string): string | undefined => {
+      const teamData = data?.teams?.[teamName];
+      const liveMatches = Array.isArray(teamData?.recentMatches) ? teamData.recentMatches : [];
+      if (liveMatches.length > 0) {
+        return liveMatches.slice(0, 5).map((match: any) => match.result).join(' ');
+      }
+
+      const formSource = data.recentForms || data.teamForm;
+      if (formSource) {
+        const key = Object.keys(formSource).find(k => k.toLowerCase().trim() === teamName.toLowerCase().trim());
+        const fetchedForm = key ? formSource[key] : undefined;
+        if (fetchedForm) {
+          return fetchedForm;
+        }
+      }
+
+      return undefined;
+    };
+
     // 1. Update FIFA Rankings
     if (data.fifaRankings) {
       updatedList = updatedList.map(c => {
@@ -224,20 +277,16 @@ export default function App() {
     }
 
     // 1.5. Update Recent Forms
-    const formSource = data.recentForms || data.teamForm;
-    if (formSource) {
-      updatedList = updatedList.map(c => {
-        const key = Object.keys(formSource).find(k => k.toLowerCase().trim() === c.name.toLowerCase().trim());
-        const fetchedForm = key ? formSource[key] : undefined;
-        if (fetchedForm) {
-          return {
-            ...c,
-            recentForm: fetchedForm
-          };
-        }
-        return c;
-      });
-    }
+    updatedList = updatedList.map(c => {
+      const fetchedForm = deriveRecentForm(c.name);
+      if (fetchedForm) {
+        return {
+          ...c,
+          recentForm: fetchedForm
+        };
+      }
+      return c;
+    });
 
     // 2. Register live matched outcomes from search
     if (data.latestMatches && Array.isArray(data.latestMatches)) {
@@ -277,7 +326,7 @@ export default function App() {
           };
 
           updatedList = updatedList.map(c => {
-            const hasRecentForm = formSource && Object.keys(formSource).some(k => k.toLowerCase().trim() === c.name.toLowerCase().trim());
+            const hasRecentForm = deriveRecentForm(c.name) !== undefined;
             if (teamHome && c.id === teamHome.id) {
               return {
                 ...c,
@@ -337,83 +386,92 @@ export default function App() {
     });
 
     // 3. Register live matched outcomes from search
-    if (globalFootballData.matches && Array.isArray(globalFootballData.matches)) {
+    const normalizedMatches = Array.isArray(globalFootballData.latestMatches)
+      ? globalFootballData.latestMatches
+      : Array.isArray(globalFootballData.matches)
+        ? globalFootballData.matches
+        : [];
+
+    if (normalizedMatches.length > 0) {
       const newlyPlayedMatches: typeof playedMatches = [];
-      
-      const finishedMatches = globalFootballData.matches.filter((m: any) => m.status === "FINISHED" || m.status === "AWARDED");
 
-      for (const rawMatch of finishedMatches) {
-        const homeTeamName = rawMatch.homeTeam?.name || "";
-        const awayTeamName = rawMatch.awayTeam?.name || "";
+      for (const rawMatch of normalizedMatches) {
+        const homeTeamName = rawMatch.homeTeam?.name || rawMatch.homeTeam || "";
+        const awayTeamName = rawMatch.awayTeam?.name || rawMatch.awayTeam || "";
 
-        const teamHome = contenders.find(c => c.name.toLowerCase() === homeTeamName.toLowerCase());
-        const teamAway = contenders.find(c => c.name.toLowerCase() === awayTeamName.toLowerCase());
-        
-        if (teamHome || teamAway) {
-          const compCode = rawMatch.competition?.code || "UNKNOWN";
-          const mId = String(rawMatch.id);
-          const utcDate = rawMatch.utcDate || "";
-          const apiEndpoint = `https://api.football-data.org/v4/competitions/${compCode}/matches`;
+        if (!homeTeamName && !awayTeamName) {
+          continue;
+        }
 
-          const scoreHome = rawMatch.score?.fullTime?.home;
-          const scoreAway = rawMatch.score?.fullTime?.away;
-          const homeScore = typeof scoreHome === "number" ? scoreHome : 0;
-          const awayScore = typeof scoreAway === "number" ? scoreAway : 0;
+        const teamHome = contenders.find(c => areTeamNamesEquivalent(c.name, homeTeamName));
+        const teamAway = contenders.find(c => areTeamNamesEquivalent(c.name, awayTeamName));
+        const compCode = rawMatch.competition?.code || rawMatch.sourceVerification?.competitionCode || "UNKNOWN";
+        const mId = String(rawMatch.id || rawMatch.sourceVerification?.matchId || `${homeTeamName}-${awayTeamName}-${rawMatch.date || rawMatch.utcDate || ''}`);
+        const utcDate = rawMatch.utcDate || rawMatch.sourceVerification?.utcDate || rawMatch.date || "";
+        const apiEndpoint = rawMatch.sourceVerification?.apiEndpoint || `https://api.football-data.org/v4/competitions/${compCode}/matches`;
 
-          const isMatchAlreadyAdded = newlyPlayedMatches.some(m => 
-            m.homeTeam.toLowerCase() === homeTeamName.toLowerCase() &&
-            m.awayTeam.toLowerCase() === awayTeamName.toLowerCase()
-          );
-  
-          // Calculate Elo updates
-          const K = 40;
-          const hElo = teamHome ? teamHome.eloRating : 1800;
-          const aElo = teamAway ? teamAway.eloRating : 1800;
-          const expectedHome = 1 / (1 + Math.pow(10, (aElo - hElo) / 400));
-          const expectedAway = 1 / (1 + Math.pow(10, (hElo - aElo) / 400));
-          
-          let actualHome = 0.5;
-          let actualAway = 0.5;
-          if (homeScore > awayScore) {
-            actualHome = 1;
-            actualAway = 0;
-          } else if (awayScore > homeScore) {
-            actualHome = 0;
-            actualAway = 1;
-          }
-          
-          const hEloDiff = Math.round(K * (actualHome - expectedHome));
-          const aEloDiff = Math.round(K * (actualAway - expectedAway));
-  
-          if (!isMatchAlreadyAdded) {
-            newlyPlayedMatches.push({
-              id: `search_${mId}`,
-              homeTeam: homeTeamName,
-              awayTeam: awayTeamName,
-              homeFlag: teamHome?.flag || '🏳️',
-              awayFlag: teamAway?.flag || '🏳️',
-              homeScore: homeScore,
-              awayScore: awayScore,
-              homeEloDiff: teamHome ? hEloDiff : 0,
-              awayEloDiff: teamAway ? aEloDiff : 0,
-              scorersSummary: `${rawMatch.competition?.name || 'International Match'}`,
-              timestamp: `Live Search FT (${utcDate ? utcDate.substring(0, 10) : 'June 2026'})`,
-              sourceVerification: {
-                apiEndpoint,
-                competitionCode: compCode,
-                matchId: mId,
-                utcDate
-              }
-            });
-          }
+        const scoreHome = typeof rawMatch.homeScore === "number"
+          ? rawMatch.homeScore
+          : typeof rawMatch.score?.fullTime?.home === "number"
+            ? rawMatch.score.fullTime.home
+            : 0;
+        const scoreAway = typeof rawMatch.awayScore === "number"
+          ? rawMatch.awayScore
+          : typeof rawMatch.score?.fullTime?.away === "number"
+            ? rawMatch.score.fullTime.away
+            : 0;
+
+        const isMatchAlreadyAdded = newlyPlayedMatches.some(m =>
+          m.homeTeam.toLowerCase() === homeTeamName.toLowerCase() &&
+          m.awayTeam.toLowerCase() === awayTeamName.toLowerCase()
+        );
+
+        const K = 40;
+        const hElo = teamHome ? teamHome.eloRating : 1800;
+        const aElo = teamAway ? teamAway.eloRating : 1800;
+        const expectedHome = 1 / (1 + Math.pow(10, (aElo - hElo) / 400));
+        const expectedAway = 1 / (1 + Math.pow(10, (hElo - aElo) / 400));
+
+        let actualHome = 0.5;
+        let actualAway = 0.5;
+        if (scoreHome > scoreAway) {
+          actualHome = 1;
+          actualAway = 0;
+        } else if (scoreAway > scoreHome) {
+          actualHome = 0;
+          actualAway = 1;
+        }
+
+        const hEloDiff = Math.round(K * (actualHome - expectedHome));
+        const aEloDiff = Math.round(K * (actualAway - expectedAway));
+
+        if (!isMatchAlreadyAdded) {
+          newlyPlayedMatches.push({
+            id: `search_${mId}`,
+            homeTeam: homeTeamName,
+            awayTeam: awayTeamName,
+            homeFlag: teamHome?.flag || '🏳️',
+            awayFlag: teamAway?.flag || '🏳️',
+            homeScore: scoreHome,
+            awayScore: scoreAway,
+            homeEloDiff: teamHome ? hEloDiff : 0,
+            awayEloDiff: teamAway ? aEloDiff : 0,
+            scorersSummary: `${rawMatch.competition?.name || rawMatch.competition || 'International Match'}`,
+            timestamp: `Live Search FT (${utcDate ? utcDate.substring(0, 10) : 'June 2026'})`,
+            sourceVerification: {
+              apiEndpoint,
+              competitionCode: compCode,
+              matchId: mId,
+              utcDate
+            }
+          });
         }
       }
-  
+
       setPlayedMatches(prev => {
         const userMatches = prev.filter(m => !m.id.startsWith('search_'));
-        // Double check: validate every newly added match exists in raw response matches
         const validated = newlyPlayedMatches.filter(m => {
-          const existsInRaw = (globalFootballData.matches || []).some((lm: any) => String(lm.id) === m.sourceVerification?.matchId);
+          const existsInRaw = normalizedMatches.some((lm: any) => String(lm.id || lm.sourceVerification?.matchId) === m.sourceVerification?.matchId);
           if (!existsInRaw) {
             console.warn("Invalid generated match detected. Match absent from Football-Data.org raw list.");
             return false;
@@ -426,7 +484,6 @@ export default function App() {
   }, [globalFootballData]);
  
   // Live Match Ends Feed States
-  const [devMode, setDevMode] = useState(false);
   const [playedMatches, setPlayedMatches] = useState<Array<{
     id: string;
     homeTeam: string;
@@ -590,7 +647,7 @@ export default function App() {
       if (!validSynchronizedDataExists) {
         console.log("Running simulation in local mode. Live data verified as completely unavailable.");
         // Only use Offline Local Simulation when store is empty, sync failed, or cache expired.
-        const res = await runSimulation(activeList, DISCUSSION_ROUNDS, true, null, clientStoreData);
+        const res = await runSimulation(activeList, discussionDepth, true, null, clientStoreData);
         return res;
       } else {
         // Force Live AI Prediction Pipeline
@@ -608,7 +665,7 @@ export default function App() {
 
           const requestPayload = {
             contenders: activeList,
-            rounds: DISCUSSION_ROUNDS,
+            rounds: discussionDepth,
             liveFootballData: compressedLiveData,
             requestId: uuid
           };
@@ -646,7 +703,7 @@ export default function App() {
           
           let offlineReason = "Backend endpoint unreached or error occurred during fetch.";
           console.log(`Running simulation in local mode. Offline fallback reason: ${offlineReason}`);
-          const res = await runSimulation(activeList, DISCUSSION_ROUNDS, true, null, clientStoreData);
+          const res = await runSimulation(activeList, discussionDepth, true, null, clientStoreData);
           return res;
         }
       }
@@ -722,24 +779,24 @@ export default function App() {
       
       streamTimeoutRef.current = setTimeout(() => {
         playChatStream(index + 1);
-      }, 150);
+        }, SYSTEM_MESSAGE_DELAY_MS);
     } else {
-      // Regular agent message: simulate fast, snappy typing feedback
+      // Regular agent message: keep a deliberate typing cue, with the moderator taking longer to settle.
       setTypingAgent(logItem.agentName);
       
-      const baseDelay = 300;
-      const lengthCoeff = Math.min(350, logItem.message.length * 0.8);
-      const totalDelay = baseDelay + lengthCoeff + (Math.random() * 50);
+      const isModerator = logItem.agentName === 'Moderator';
+      const totalDelay = (isModerator ? MODERATOR_TYPING_DELAY_MIN_MS : AGENT_TYPING_DELAY_MIN_MS) + Math.random() * (isModerator ? MODERATOR_TYPING_DELAY_RANGE_MS : AGENT_TYPING_DELAY_RANGE_MS);
+      const betweenDelay = (isModerator ? MODERATOR_BETWEEN_MESSAGE_DELAY_MIN_MS : BETWEEN_MESSAGE_DELAY_MIN_MS) + Math.random() * (isModerator ? MODERATOR_BETWEEN_MESSAGE_DELAY_RANGE_MS : BETWEEN_MESSAGE_DELAY_RANGE_MS);
 
       streamTimeoutRef.current = setTimeout(() => {
         setTypingAgent(null);
         setChatMessages(prev => [...prev, logItem]);
         setLogs(prev => [...prev, logItem]);
         
-        // Short pause between messages
+        // Brief pause between messages, longer for the moderator's consensus step.
         secondaryTimeoutRef.current = setTimeout(() => {
           playChatStream(index + 1);
-        }, 250);
+          }, betweenDelay);
       }, totalDelay);
     }
   };
@@ -773,7 +830,7 @@ export default function App() {
     const activeRosterContenders = rosterContendersRef.current;
 
     setIsSyncing(true);
-    setSyncStatus('🛰️ Establishing live crawler connection to Football-Data.org...');
+    setSyncStatus('🛰️ Establishing live crawler connection...');
     if (!silent) {
       setLogs(prev => [
         {
@@ -782,8 +839,8 @@ export default function App() {
           stepType: 'SEQUENTIAL_DATA',
           agentName: 'System',
           role: 'Orchestrator',
-          title: 'Football-Data.org Live Sync Engaged',
-          message: 'Requesting verified FIFA stats and recent results from Football-Data.org...'
+          title: 'Live Sync Engaged',
+          message: 'Requesting verified FIFA stats and recent results from the live data source...'
         },
         ...prev
       ]);
@@ -810,14 +867,14 @@ export default function App() {
             stepType: 'SEQUENTIAL_DATA',
             agentName: 'Stats Agent',
             role: 'Statistics Agent',
-            title: 'Football-Data.org Stats Vetted & Integrated',
-            message: `Dynamic Sync pipeline fetched rankings and key match endings successfully from: ${result.source || 'Football-Data.org'}.`
+            title: 'Stats Vetted & Integrated',
+            message: `Dynamic Sync pipeline fetched rankings and key match endings successfully from: ${result.source || 'the live data source'}.`
           },
           ...prev
         ]);
       }
       
-      setSyncStatus('✅ Football-Data.org synchronization completed successfully!');
+      setSyncStatus('✅ Live data synchronization completed successfully!');
       setTimeout(() => setSyncStatus(''), 5500);
 
       const now = new Date();
@@ -1110,21 +1167,34 @@ export default function App() {
                     )}
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={isSyncing}
-                    onClick={handleSyncLiveData}
-                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-[11px] font-mono text-zinc-200 rounded-lg transition-all border border-zinc-700 font-medium cursor-pointer shadow-sm flex items-center gap-1.5 shrink-0 self-stretch md:self-auto justify-center"
-                  >
-                    {isSyncing ? (
-                      <>
-                        <span className="w-3 h-3 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin shrink-0"></span>
-                        <span>Football data is already synchronizing...</span>
-                      </>
-                    ) : (
-                      'Search Sync'
-                    )}
-                  </button>
+                  <div className="flex flex-col gap-2 shrink-0 self-stretch md:self-auto">
+                    <button
+                      type="button"
+                      disabled={isSyncing}
+                      onClick={handleSyncLiveData}
+                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-[11px] font-mono text-zinc-200 rounded-lg transition-all border border-zinc-700 font-medium cursor-pointer shadow-sm flex items-center gap-1.5 justify-center"
+                    >
+                      {isSyncing ? (
+                        <>
+                          <span className="w-3 h-3 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin shrink-0"></span>
+                          <span>Football data is already synchronizing...</span>
+                        </>
+                      ) : (
+                        'Search Sync'
+                      )}
+                    </button>
+
+                    <div className="bg-zinc-950/80 border border-zinc-800 rounded-xl p-3 text-xs space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold">Debate Depth</span>
+                        <span className="text-[10px] font-mono text-indigo-300">{discussionDepth} rounds fixed</span>
+                      </div>
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-zinc-300">
+                        <div className="text-xs font-semibold text-white">Balanced Debate</div>
+                        <div className="text-[10px] text-zinc-500 font-mono mt-1">The council always runs on a fixed 2-round discussion.</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Display dynamic search summaries if populated */}
@@ -1135,12 +1205,11 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Grounded Sources & Citations list */}
                 {searchCitations && searchCitations.length > 0 && (
                   <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3.5 text-xs space-y-2">
                     <h5 className="font-semibold text-zinc-400 text-[10px] uppercase tracking-wider font-mono flex items-center gap-1.5">
                       <span className="h-1 w-1 rounded-full bg-emerald-400 animate-pulse"></span>
-                      Grounded Sources & Citations ({searchCitations.length}):
+                      Live Data Sources ({searchCitations.length}):
                     </h5>
                     <div className="flex flex-wrap gap-2 max-h-[140px] overflow-y-auto pr-1">
                       {searchCitations.map((citation: any, idx) => (
@@ -1164,87 +1233,6 @@ export default function App() {
                     </div>
                   </div>
                 )}
-
-                {/* Synced Live Matches feed history */}
-                {playedMatches.length > 0 ? (
-                  <div className="mt-2 pt-4 border-t border-zinc-800/80 space-y-3">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-400 block font-semibold flex items-center gap-1.5">
-                      <span className="h-1 w-1 rounded-full bg-zinc-450"></span>
-                      Retrieved Recent Matches
-                    </span>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-1">
-                      {playedMatches.map(match => (
-                        <div key={match.id} className="bg-zinc-950 rounded-lg px-4 py-3 border border-zinc-800 flex flex-col justify-between text-[11px] gap-1.5 shadow-sm">
-                          <div className="flex justify-between items-center text-zinc-300">
-                            <span className="font-semibold flex items-center gap-1.5">
-                              {match.homeFlag} {match.homeTeam} <span className="font-mono text-zinc-400 font-bold mx-0.5">{match.homeScore}</span>
-                              <span className="text-zinc-650 font-mono">-</span>
-                              <span className="font-mono text-zinc-400 font-bold mx-0.5">{match.awayScore}</span> {match.awayFlag} {match.awayTeam}
-                            </span>
-                            <span className="text-[9px] font-mono text-zinc-500 uppercase">FT</span>
-                          </div>
-                          <div className="text-[10px] text-zinc-400 italic leading-snug">
-                            {match.scorersSummary}
-                          </div>
-                          <div className="flex justify-between items-center text-[9px] font-mono text-zinc-550 border-t border-zinc-800/80 pt-1.5 mt-1">
-                            <span>Elo Shift: {match.homeEloDiff >= 0 ? '+' : ''}{match.homeEloDiff} / {match.awayEloDiff >= 0 ? '+' : ''}{match.awayEloDiff}</span>
-                            <span>{match.timestamp}</span>
-                          </div>
-
-                          {/* Source Verification Box */}
-                          {match.sourceVerification && (
-                            <div className="mt-2 pt-1.5 border-t border-zinc-800/50 text-[9px] font-mono text-zinc-500 bg-zinc-900/30 p-1.5 rounded flex flex-col gap-1">
-                              <div className="text-emerald-500 font-bold uppercase text-[8px] tracking-wider">✓ Verified Football-Data.org Source</div>
-                              <div className="flex justify-between">
-                                <div><span className="text-zinc-400">Comp:</span> {match.sourceVerification.competitionCode}</div>
-                                <div><span className="text-zinc-400">ID:</span> {match.sourceVerification.matchId}</div>
-                              </div>
-                              <div><span className="text-zinc-400">UTC Date:</span> {match.sourceVerification.utcDate}</div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-2 pt-4 border-t border-zinc-800/80 space-y-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-400 block font-semibold flex items-center gap-1.5">
-                      <span className="h-1 w-1 rounded-full bg-zinc-450"></span>
-                      Retrieved Recent Matches
-                    </span>
-                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-center text-xs text-zinc-500 font-mono">
-                      No live data available.
-                    </div>
-                  </div>
-                )}
-
-                {/* Developer Mode Toggle & Raw JSON View */}
-                <div className="mt-4 pt-4 border-t border-zinc-800/80 flex flex-col gap-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-400 block font-semibold">
-                      Diagnostic Tools
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setDevMode(!devMode)}
-                      className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 hover:bg-zinc-850 text-[9px] font-mono text-zinc-400 hover:text-white rounded-md transition-all flex items-center gap-1 cursor-pointer"
-                    >
-                      {devMode ? 'Hide' : 'Show'} Raw Football-Data.org JSON
-                    </button>
-                  </div>
-
-                  {devMode && (
-                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3.5 space-y-2">
-                      <div className="flex justify-between items-center text-[10px] font-mono text-zinc-400 border-b border-zinc-800 pb-1.5">
-                        <span>DATA SOURCE: Football-Data.org Direct API v4</span>
-                        <span>STATUS: Verified</span>
-                      </div>
-                      <pre className="text-[10px] font-mono text-zinc-450 bg-zinc-900/50 p-2.5 rounded border border-zinc-855 overflow-x-auto max-h-[250px] overflow-y-auto">
-                        {globalFootballData?.rawJson || JSON.stringify(globalFootballData, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                </div>
               </div>
 
               {/* 48-NATION ROSTER CATALOG */}

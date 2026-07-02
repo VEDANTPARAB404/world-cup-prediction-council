@@ -754,11 +754,32 @@ export async function retrieveFootballData(
       }
 
       // Build the normalized data
+      const TEAM_ALIASES: Record<string, string> = {
+        'dr congo': 'congo dr',
+        'democratic republic of congo': 'congo dr',
+        'democratic republic of the congo': 'congo dr',
+        'congo democratic republic': 'congo dr'
+      };
+
+      const normalizeTeamName = (teamName: string): string => {
+        const base = teamName
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9\s]/g, ' ')
+          .replace(/\s+/g, ' ');
+        return TEAM_ALIASES[base] || base;
+      };
+
+      const canonicalTeamKey = (teamName: string): string => {
+        const normalized = normalizeTeamName(teamName);
+        return normalized.split(' ').filter(Boolean).sort().join(' ');
+      };
+
       const isTeamMatch = (contenderName: string, apiTeamName: string): boolean => {
         if (!contenderName || !apiTeamName) return false;
-        const cNorm = contenderName.toLowerCase().trim();
-        const aNorm = apiTeamName.toLowerCase().trim();
-        return cNorm === aNorm || aNorm.includes(cNorm) || cNorm.includes(aNorm);
+        const contenderKey = canonicalTeamKey(contenderName);
+        const apiKey = canonicalTeamKey(apiTeamName);
+        return contenderKey === apiKey || apiKey.includes(contenderKey) || contenderKey.includes(apiKey);
       };
 
       const teamsMap: Record<string, any> = {};
